@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, extname } from "node:path";
 
-import { createFrameRenderer } from "./gpu";
+import { createFrameRenderer, type IFrameRenderer, type IGpu } from "./gpu";
 import { assertInputExists, findClip, loadModel } from "./load";
 import { resolveCameraAngles, type RenderOptions } from "./options";
 import { encodePng } from "./png";
@@ -28,22 +28,25 @@ export interface IRenderResult {
  * With `animation.clip`, the model is posed at `animation.start` seconds of that clip; the pose is
  * derived from the time alone, so the same request always renders the same image.
  *
+ * @param shared - A GPU kept by a long-lived process (`cli --serve`); without it the render creates
+ *   its own and frees it.
  * @throws Error for a missing input, a non-PNG output path, an unknown clip or a GPU failure.
  */
-export async function render(options: RenderOptions, reporter: IRenderReporter = {}): Promise<IRenderResult> {
+export async function render(options: RenderOptions, reporter: IRenderReporter = {}, shared?: IGpu): Promise<IRenderResult> {
   const startedAt = performance.now();
   if (extname(options.output).toLowerCase() !== ".png") throw new Error(`Output must be a .png file (got "${options.output}")`);
   if (extname(options.input).toLowerCase() !== ".bbmodel") throw new Error(`Input must be a .bbmodel file (got "${options.input}")`);
   await assertInputExists(options.input);
 
-  const gpu = await createFrameRenderer({
+  const frameOptions = {
     width: options.width,
     height: options.height,
     supersample: options.supersample,
     toneMapping: options.toneMapping,
     exposure: options.exposure,
     background: options.background === "transparent" ? undefined : options.background,
-  });
+  };
+  const gpu: IFrameRenderer = shared === undefined ? await createFrameRenderer(frameOptions) : shared.frame(frameOptions);
 
   try {
     const model = await loadModel(options.input, { textureFilter: options.textureFilter });

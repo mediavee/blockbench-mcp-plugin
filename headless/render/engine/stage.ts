@@ -61,14 +61,25 @@ interface IEnvironment {
   dispose(): void;
 }
 
-async function createEnvironment(options: IStageOptions, preset: ILightingPreset): Promise<IEnvironment> {
+/**
+ * Room environment maps by renderer. Building one compiles the PMREM pipelines and renders six faces,
+ * which costs more than a whole frame, and it never depends on the model, so a renderer that draws
+ * many frames builds it once. It lives as long as its renderer.
+ */
+const ENVIRONMENTS = new WeakMap<WebGPURenderer, Texture>();
+
+function createEnvironment(options: IStageOptions, preset: ILightingPreset): IEnvironment {
   if (preset.room <= 0) return { texture: null, dispose: () => undefined };
-  const pmrem = new PMREMGenerator(options.renderer);
-  const room = new RoomEnvironment();
-  const target = pmrem.fromScene(room, 0.04);
-  pmrem.dispose();
-  room.dispose();
-  return { texture: target.texture, dispose: () => target.dispose() };
+  let texture = ENVIRONMENTS.get(options.renderer);
+  if (texture === undefined) {
+    const pmrem = new PMREMGenerator(options.renderer);
+    const room = new RoomEnvironment();
+    texture = pmrem.fromScene(room, 0.04).texture;
+    pmrem.dispose();
+    room.dispose();
+    ENVIRONMENTS.set(options.renderer, texture);
+  }
+  return { texture, dispose: () => undefined };
 }
 
 function createLight(spec: ILightSpec, radius: number, shadows: boolean): Light {
@@ -128,7 +139,7 @@ export async function createStage(options: IStageOptions): Promise<IStage> {
   });
   scene.add(rig);
 
-  const environment = await createEnvironment(options, preset);
+  const environment = createEnvironment(options, preset);
   scene.environment = environment.texture;
   scene.environmentIntensity = preset.room;
 

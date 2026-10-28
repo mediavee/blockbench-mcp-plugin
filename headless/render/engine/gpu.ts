@@ -70,44 +70,78 @@ function createOutputMaterial(hdr: RenderTarget, options: IFrameRendererOptions)
   return material;
 }
 
+/** One Dawn device and three.js renderer, shared by every frame size a process renders. */
+export interface IGpu {
+  readonly renderer: WebGPURenderer;
+  /**
+   * Returns a frame renderer for these settings. The targets of the previous settings are freed when
+   * the settings change, so a process alternating sizes rebuilds them; the device and its compiled
+   * pipelines stay.
+   */
+  frame(options: IFrameRendererOptions): IFrameRenderer;
+  dispose(): Promise<void>;
+}
+
 /**
- * Creates a Dawn-backed WebGPU renderer that draws into a 4x MSAA half-float target at
- * `supersample` times the output size, then resolves it to 8-bit through a tone-mapping pass.
+ * Creates the Dawn device and the three.js renderer once per process.
  *
- * Only one Dawn instance may exist per process, so create one renderer and reuse it for every frame.
+ * Only one Dawn instance may exist per process, so a long-lived process keeps this and asks it for
+ * frame renderers; each frame renderer draws into a 4x MSAA half-float target at `supersample` times
+ * the output size, then resolves it to 8-bit through a tone-mapping pass.
  */
-export async function createFrameRenderer(options: IFrameRendererOptions): Promise<IFrameRenderer> {
+export async function createGpu(): Promise<IGpu> {
   const runtime: RendererRuntime = await createRendererRuntime();
   const renderer = new WebGPURenderer({ device: runtime.device, antialias: false, alpha: true });
   await renderer.init();
   renderer.shadowMap.enabled = true;
-  renderer.toneMappingExposure = options.exposure;
   renderer.setClearColor(0x000000, 0);
+  let current: { key: string; frame: IFrameRenderer; free(): void } | undefined;
 
-  const scale = options.supersample;
-  const hdr = new RenderTarget(options.width * scale, options.height * scale, { type: HalfFloatType, samples: 4 });
-  const ldr = new RenderTarget(options.width, options.height, { type: UnsignedByteType });
-  const outputMaterial = createOutputMaterial(hdr, options);
-  const quad = new QuadMesh(outputMaterial);
+  const build = (options: IFrameRendererOptions) => {
+    const scale = options.supersample;
+    const hdr = new RenderTarget(options.width * scale, options.height * scale, { type: HalfFloatType, samples: 4 });
+    const ldr = new RenderTarget(options.width, options.height, { type: UnsignedByteType });
+    const outputMaterial = createOutputMaterial(hdr, options);
+    const quad = new QuadMesh(outputMaterial);
+    const frame: IFrameRenderer = {
+      renderer,
+      async render(scene, camera) {
+        renderer.toneMappingExposure = options.exposure;
+        renderer.setRenderTarget(hdr);
+        renderer.render(scene, camera);
+        renderer.setRenderTarget(ldr);
+        quad.render(renderer);
+        renderer.setRenderTarget(null);
+        const pixels = await renderer.readRenderTargetPixelsAsync(ldr, 0, 0, options.width, options.height);
+        const bytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+        return packRows(bytes, options.width, options.height);
+      },
+      // Freed by the shared GPU when the settings change or the process ends.
+      dispose: () => Promise.resolve(),
+    };
+    return { frame, free: () => [hdr, ldr, outputMaterial].forEach((resource) => resource.dispose()) };
+  };
 
   return {
     renderer,
-    async render(scene, camera) {
-      renderer.setRenderTarget(hdr);
-      renderer.render(scene, camera);
-      renderer.setRenderTarget(ldr);
-      quad.render(renderer);
-      renderer.setRenderTarget(null);
-      const pixels = await renderer.readRenderTargetPixelsAsync(ldr, 0, 0, options.width, options.height);
-      const bytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
-      return packRows(bytes, options.width, options.height);
+    frame(options) {
+      const key = JSON.stringify(options);
+      if (current?.key !== key) {
+        current?.free();
+        current = { key, ...build(options) };
+      }
+      return current.frame;
     },
     async dispose() {
-      hdr.dispose();
-      ldr.dispose();
-      outputMaterial.dispose();
+      current?.free();
       renderer.dispose();
       await runtime.dispose();
     },
   };
+}
+
+/** Creates a GPU and one frame renderer that owns it, for a process that renders a single frame. */
+export async function createFrameRenderer(options: IFrameRendererOptions): Promise<IFrameRenderer> {
+  const gpu = await createGpu();
+  return { ...gpu.frame(options), dispose: () => gpu.dispose() };
 }

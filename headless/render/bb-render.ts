@@ -3,12 +3,15 @@
  * (a headless three.js WebGPU renderer).
  *
  * The engine runs on Node, not Bun: Bun segfaults inside Dawn's `dawn.node` addon. So this module
- * spawns `node cli.mjs` as a child process per render. That also sidesteps Dawn's
- * one-GPU-instance-per-process rule, and a semaphore caps how many renders share the GPU at once.
+ * keeps `node cli.mjs --serve` worker processes, one render at a time each, up to the concurrency
+ * limit. A worker keeps its GPU device, compiled pipelines and environment map between renders: a
+ * fresh process spends most of a frame building those, so reuse makes a frame several times cheaper.
+ * Workers exit after a quiet minute; a worker that times out is killed and replaced.
  * `cli.mjs` and its packages are prepared on first use by {@link prepareRenderRuntime}.
  *
  * An explicit `cli` (the `--bb-render` flag or `BB_RENDER_CLI`) bypasses that and runs any
- * compatible external bb-render build instead.
+ * compatible external bb-render build instead, one process per render, since such a build may not
+ * serve.
  *
  * @module
  */
@@ -130,13 +133,123 @@ export function buildRenderArgs(request: IRenderRequest): string[] {
   ];
 }
 
-/** Spawns render processes. */
+/** How long an idle worker waits for its next render before exiting. */
+const WORKER_IDLE_MS = 60_000;
+
+interface IPending {
+  resolve(outcome: IRenderOutcome): void;
+  reject(error: Error): void;
+  started: number;
+  output: string;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/** One `cli.mjs --serve` process, rendering the requests it is given one at a time. */
+class RenderWorker {
+  private readonly child: ReturnType<typeof Bun.spawn<"pipe", "pipe", "pipe">>;
+  private pending: IPending | undefined;
+  private nextId = 0;
+  private idle: ReturnType<typeof setTimeout> | undefined;
+  private stderr = "";
+  dead = false;
+
+  constructor(node: string, cli: string, private readonly timeoutMs: number) {
+    this.child = Bun.spawn([node, cli, "--serve"], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    void this.readLines(this.child.stdout, (line) => this.answer(line));
+    void this.readLines(this.child.stderr, (line) => {
+      this.stderr = `${this.stderr}${line}\n`.slice(-4000);
+    });
+    void this.child.exited.then((code) => this.fail(new Error(`The render worker exited with code ${code}.\n${this.stderr.trim()}`)));
+    this.armIdle();
+  }
+
+  /** Renders one request; the caller guarantees the worker is not busy. */
+  render(request: IRenderRequest): Promise<IRenderOutcome> {
+    clearTimeout(this.idle);
+    this.nextId += 1;
+    const line = `${JSON.stringify({ id: this.nextId, args: buildRenderArgs(request) })}\n`;
+    return new Promise<IRenderOutcome>((resolve, reject) => {
+      const started = performance.now();
+      const timer = setTimeout(() => {
+        this.fail(new Error(`The renderer was stopped (SIGKILL) after ${Math.round(performance.now() - started)} ms.\n${this.stderr.trim()}`));
+      }, this.timeoutMs);
+      this.pending = { resolve, reject, started, output: request.output, timer };
+      this.child.stdin.write(line);
+      void this.child.stdin.flush();
+    });
+  }
+
+  private answer(line: string): void {
+    const pending = this.pending;
+    if (pending === undefined || line.trim() === "") return;
+    let reply: { ok?: boolean; error?: string; log?: string };
+    try {
+      reply = JSON.parse(line) as typeof reply;
+    } catch {
+      return;
+    }
+    this.pending = undefined;
+    clearTimeout(pending.timer);
+    this.armIdle();
+    if (reply.ok === true) pending.resolve({ output: pending.output, milliseconds: Math.round(performance.now() - pending.started), log: reply.log ?? "" });
+    else pending.reject(new Error(`The renderer failed: ${reply.error ?? "unknown error"}\n${reply.log ?? ""}`.trim()));
+  }
+
+  /** Kills the worker and rejects its render, if any. */
+  fail(error: Error): void {
+    if (!this.dead) {
+      this.dead = true;
+      clearTimeout(this.idle);
+      this.child.kill("SIGKILL");
+    }
+    const pending = this.pending;
+    this.pending = undefined;
+    if (pending !== undefined) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+  }
+
+  private armIdle(): void {
+    clearTimeout(this.idle);
+    this.idle = setTimeout(() => this.fail(new Error("idle")), WORKER_IDLE_MS);
+    this.idle.unref?.();
+  }
+
+  private async readLines(stream: ReadableStream<Uint8Array>, onLine: (line: string) => void): Promise<void> {
+    const decoder = new TextDecoder();
+    let buffered = "";
+    const reader = stream.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      buffered += decoder.decode(value, { stream: true });
+      let newline = buffered.indexOf("\n");
+      while (newline >= 0) {
+        onLine(buffered.slice(0, newline));
+        buffered = buffered.slice(newline + 1);
+        newline = buffered.indexOf("\n");
+      }
+    }
+  }
+}
+
+/** Runs renders on pooled `--serve` workers, or one process per render for an explicit external CLI. */
 export class BbRenderer {
   private readonly semaphore: Semaphore;
   private cliPromise: Promise<string> | undefined;
+  private readonly idleWorkers: RenderWorker[] = [];
+  private readonly workers = new Set<RenderWorker>();
 
   constructor(readonly config: IRendererConfig) {
     this.semaphore = new Semaphore(Math.max(1, config.concurrency));
+  }
+
+  /** Kills every worker, failing the renders in flight; the server calls it when its client leaves. */
+  close(): void {
+    this.idleWorkers.length = 0;
+    this.workers.forEach((worker) => worker.fail(new Error("The renderer was closed.")));
+    this.workers.clear();
   }
 
   /** Resolves the CLI path once: the explicit override, else the prepared runtime. A failed preparation is retried on the next render. */
@@ -159,6 +272,7 @@ export class BbRenderer {
     const cli = await this.resolveCli().catch((error: unknown) => {
       throw new Error(`The render engine is not available: ${error instanceof Error ? error.message : String(error)}`);
     });
+    if (this.config.cli === undefined) return this.semaphore.run(() => this.renderOnWorker(cli, request));
     return this.semaphore.run(async () => {
       const started = performance.now();
       const child = Bun.spawn([this.config.node, cli, ...buildRenderArgs(request)], { stdout: "pipe", stderr: "pipe", timeout: this.config.timeoutMs, killSignal: "SIGKILL" });
@@ -170,5 +284,21 @@ ${log}`);
 ${log}`);
       return { output: request.output, milliseconds: Math.round(performance.now() - started), log };
     });
+  }
+
+  /** Renders on an idle worker, starting one when none is free; the semaphore bounds how many exist. */
+  private async renderOnWorker(cli: string, request: IRenderRequest): Promise<IRenderOutcome> {
+    let worker = this.idleWorkers.pop();
+    while (worker?.dead) worker = this.idleWorkers.pop();
+    if (worker === undefined) {
+      worker = new RenderWorker(this.config.node, cli, this.config.timeoutMs);
+      this.workers.add(worker);
+    }
+    try {
+      return await worker.render(request);
+    } finally {
+      if (worker.dead) this.workers.delete(worker);
+      else this.idleWorkers.push(worker);
+    }
   }
 }
