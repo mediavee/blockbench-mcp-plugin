@@ -62,7 +62,7 @@ export interface IRenderRequest {
   /** Clip time in seconds. */
   time?: number;
   orthographic?: boolean;
-  lighting?: "studio" | "outdoor" | "flat";
+  lighting?: "studio" | "outdoor" | "flat" | "game";
 }
 
 /** Result of one render. */

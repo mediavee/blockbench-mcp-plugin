@@ -16,6 +16,8 @@ export interface ILightingPreset {
   lights: readonly ILightSpec[];
   /** Strength of the built-in studio environment; 0 disables it. */
   room: number;
+  /** Replace lighting with the game's per-face shade on unlit materials, without tone mapping. */
+  gameShade?: boolean;
 }
 
 /**
@@ -42,6 +44,11 @@ export const LIGHTING_PRESETS: Record<RenderOptions["lighting"]["preset"], ILigh
   flat: {
     room: 0,
     lights: [{ type: "ambient", color: 0xffffff, intensity: 1.0 }],
+  },
+  game: {
+    room: 0,
+    lights: [],
+    gameShade: true,
   },
 };
 

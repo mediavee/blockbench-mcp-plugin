@@ -19,6 +19,7 @@ import {
 } from "three/webgpu";
 
 import { applyPlacement, createRenderCamera } from "./camera";
+import { applyGameShade } from "./game-shade";
 import { boundingSphere, frameCamera, type IBounds } from "./framing";
 import { LIGHTING_PRESETS, SHADOW_GROUND_OPACITY, type ILightingPreset, type ILightSpec } from "./lighting";
 import type { RenderOptions } from "./options";
@@ -129,6 +130,7 @@ export async function createStage(options: IStageOptions): Promise<IStage> {
     object.receiveShadow = shadows;
   });
   scene.add(options.model);
+  const freeShade = preset.gameShade === true ? applyGameShade(options.model) : () => undefined;
 
   const rig = new Group();
   rig.position.set(center[0], center[1], center[2]);
@@ -170,6 +172,7 @@ export async function createStage(options: IStageOptions): Promise<IStage> {
     aim,
     dispose() {
       environment.dispose();
+      freeShade();
       lights.forEach((light) => light.dispose());
       ground?.geometry.dispose();
       [ground?.material].flat().forEach((material) => material?.dispose());

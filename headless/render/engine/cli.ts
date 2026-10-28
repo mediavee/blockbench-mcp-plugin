@@ -38,7 +38,7 @@ Options:
       --padding <n>          Framing margin (default 1.08)
       --ortho                Orthographic projection
       --fit <mode>           auto | box | sphere
-      --lighting <name>      studio | outdoor | flat
+      --lighting <name>      studio | outdoor | flat | game
       --no-shadows           Disable shadow maps
       --ground <mode>        shadow | solid | none
       --ground-color <hex>   Solid ground color

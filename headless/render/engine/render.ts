@@ -42,7 +42,8 @@ export async function render(options: RenderOptions, reporter: IRenderReporter =
     width: options.width,
     height: options.height,
     supersample: options.supersample,
-    toneMapping: options.toneMapping,
+    // The game shade shows texels as the game does; a tone curve would shift their colours.
+    toneMapping: options.lighting.preset === "game" ? "none" as const : options.toneMapping,
     exposure: options.exposure,
     background: options.background === "transparent" ? undefined : options.background,
   };
