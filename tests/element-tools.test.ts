@@ -421,7 +421,8 @@ describe("remove_element", () => {
       expect(limited.truncated_at_max_depth).toEqual(["rig"]);
       const depthTwo = await callJson("list_outline", { max_depth: 2 });
       expect(depthTwo.truncated_at_max_depth).toBeUndefined();
-      expect(depthTwo.roots[0].children[0].children[0].children).toEqual([]);
+      const roots = depthTwo.roots as { children: { children: { children: unknown }[] }[] }[];
+      expect(roots[0].children[0].children[0].children).toEqual([]);
     });
   });
 });

@@ -8,7 +8,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ModelStore } from "./document/store";
 import { BbRenderer, buildRenderArgs, Semaphore } from "./render/bb-render";
 import { createHeadlessServer, HEADLESS_TOOLS } from "./server";
-import { creatureModel } from "./test-fixtures";
+import { creatureModel, shareStub } from "./test-fixtures";
 
 const ONE_PIXEL_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
@@ -18,7 +18,12 @@ interface ISession {
   json<T = Record<string, unknown>>(name: string, args: Record<string, unknown>): Promise<T>;
 }
 
-async function connect(root: string, clientName: string, renderer = new BbRenderer({ node: "node", concurrency: 1, timeoutMs: 1000, prepare: () => Promise.reject(new Error("runtime disabled in tests")) })): Promise<ISession> {
+async function connect(
+  root: string,
+  clientName: string,
+  renderer = new BbRenderer({ node: "node", concurrency: 1, timeoutMs: 1000, prepare: () => Promise.reject(new Error("runtime disabled in tests")) }),
+  shareUrl = "http://127.0.0.1:9/",
+): Promise<ISession> {
   const store = new ModelStore({ roots: [root] });
   const server = createHeadlessServer((mcp) => ({
     store,
@@ -29,6 +34,7 @@ async function connect(root: string, clientName: string, renderer = new BbRender
     webApp: { enabled: true, baseUrl: "https://web.blockbench.net/", inlineMax: 8000, browserMax: 2_000_000, launcherDir: join(root, "renders", "web-app") },
     // A harmless stand-in for Blockbench: the test runtime itself.
     desktop: { executable: process.execPath, mcpUrl: "http://127.0.0.1:9/bb-mcp" },
+    shareUrl,
   }));
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: clientName, version: "1.0.0" });
@@ -370,6 +376,77 @@ describe("headless MCP server", () => {
     const java = await session.json<{ code: string; class_name: string }>("bbmodel_export_modded_entity", { file: "mob.bbmodel", template: "1.17" });
     expect(java.code).toContain("class ");
     expect(java.code).toContain("body");
+  });
+
+  test("bbmodel_share_url uploads the model as Blockbench's share dialog does and returns its public link", async () => {
+    const stub = shareStub();
+    try {
+      const session = await connect(root, "sharer", undefined, stub.url);
+      const { tools } = await session.client.listTools();
+      const tool = tools.find((entry) => entry.name === "bbmodel_share_url");
+      expect(tool?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: true });
+      expect(tool?.description).toContain("PUBLIC");
+
+      await session.json("bbmodel_create", { file: "chair.bbmodel" });
+      await session.json("bbmodel_edit", { file: "chair.bbmodel", operations: [{ op: "add_cube", name: "seat", from: [0, 0, 0], to: [8, 2, 8] }] });
+      await Bun.write(join(root, "wood.png"), Buffer.from(ONE_PIXEL_PNG.split(",")[1] ?? "", "base64"));
+      const doc = JSON.parse(await Bun.file(join(root, "chair.bbmodel")).text()) as Record<string, unknown>;
+      await Bun.write(join(root, "chair.bbmodel"), JSON.stringify({ ...doc, textures: [{ uuid: crypto.randomUUID(), name: "wood", path: join(root, "wood.png"), relative_path: "wood.png" }] }));
+
+      const shared = await session.json<{ url: string; id: string; expires: string }>("bbmodel_share_url", { file: "chair.bbmodel" });
+      expect(shared).toMatchObject({ url: `${stub.url}ABoX92`, id: "ABoX92" });
+      const sent = stub.requests[0]?.body ?? {};
+      // The dialog's defaults: the project name, 2 days, and no thumbnail key when none is sent.
+      expect(Object.keys(sent).toSorted()).toEqual(["expire_time", "model", "name"]);
+      expect(sent).toMatchObject({ name: "chair", expire_time: "2d" });
+      const model = JSON.parse(String(sent.model)) as { elements: unknown[]; textures: Record<string, unknown>[] };
+      expect(model.elements).toEqual(doc.elements as unknown[]);
+      expect(model.textures[0]).toMatchObject({ name: "wood", source: ONE_PIXEL_PNG });
+      expect(model.textures[0]).not.toHaveProperty("path");
+      expect(model.textures[0]).not.toHaveProperty("relative_path");
+
+      await session.json("bbmodel_share_url", { file: "chair.bbmodel", name: "Chair", expire: "10m" });
+      expect(stub.requests[1]?.body).toMatchObject({ name: "Chair", expire_time: "10m" });
+
+      const outside = await session.call("bbmodel_share_url", { file: "../../elsewhere/model.bbmodel" });
+      expect(outside.isError).toBe(true);
+      expect(outside.content[0]?.type === "text" ? outside.content[0].text : "").toContain("outside the workspace roots");
+      // A failed thumbnail render uploads nothing.
+      const noRender = await session.call("bbmodel_share_url", { file: "chair.bbmodel", thumbnail: true });
+      expect(noRender.isError).toBe(true);
+      expect(stub.requests).toHaveLength(2);
+    } finally {
+      stub.stop();
+    }
+  });
+
+  test("bbmodel_share_url renders the thumbnail it uploads", async () => {
+    const fakeCli = join(root, "fake-render.mjs");
+    await Bun.write(fakeCli, [`import { writeFileSync } from "node:fs";`, "const [, , output] = process.argv.slice(2);", `writeFileSync(output, Buffer.from("${ONE_PIXEL_PNG.split(",")[1]}", "base64"));`].join("\n"));
+    const stub = shareStub();
+    try {
+      const session = await connect(root, "sharer", new BbRenderer({ cli: fakeCli, node: process.execPath, concurrency: 1, timeoutMs: 20_000 }), stub.url);
+      await session.json("bbmodel_create", { file: "chair.bbmodel" });
+      await session.json("bbmodel_share_url", { file: "chair.bbmodel", thumbnail: true });
+      expect(stub.requests[0]?.body.thumbnail).toBe(ONE_PIXEL_PNG);
+      expect(await readdir(join(root, "renders"))).toEqual([]);
+    } finally {
+      stub.stop();
+    }
+  });
+
+  test("bbmodel_share_url reports the service's refusal as a tool error", async () => {
+    const stub = shareStub(() => new Response("Payload Too Large", { status: 413 }));
+    try {
+      const session = await connect(root, "sharer", undefined, stub.url);
+      await session.json("bbmodel_create", { file: "chair.bbmodel" });
+      const refused = await session.call("bbmodel_share_url", { file: "chair.bbmodel" });
+      expect(refused.isError).toBe(true);
+      expect(refused.content).toHaveLength(1);
+      expect(refused.content[0]?.type === "text" ? refused.content[0].text : "").toContain("too large (HTTP 413");
+    } finally {
+      stub.stop();
+    }
   });
 
   test("blockbench_launch starts the configured app and refuses files outside the workspace", async () => {

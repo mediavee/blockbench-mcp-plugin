@@ -93,6 +93,7 @@ describe("particle tools", () => {
       clientName: () => "particle-test",
       webApp: { enabled: false, baseUrl: "https://web.blockbench.net/", inlineMax: 8000, browserMax: 2_000_000, launcherDir: join(root, "renders", "web-app") },
       desktop: { executable: process.execPath, mcpUrl: "http://127.0.0.1:9/bb-mcp" },
+      shareUrl: "http://127.0.0.1:9/",
     }));
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "particle-test", version: "1.0.0" });
