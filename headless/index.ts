@@ -19,6 +19,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { UNKNOWN_AGENT } from "@/lib/ai-disclosure";
 import { VERSION } from "@/lib/constants";
 import { DEFAULT_DESKTOP_MCP_URL } from "./app/desktop";
+import { DEFAULT_SHARE_URL } from "./app/share";
 import { DEFAULT_BROWSER_MAX, DEFAULT_INLINE_MAX, DEFAULT_WEB_APP_URL, normalizeWebAppUrl } from "./app/web-link";
 import { ModelStore } from "./document/store";
 import { BbRenderer } from "./render/bb-render";
@@ -129,6 +130,7 @@ async function main(): Promise<void> {
       launcherDir: join(scratchDir, "web-app"),
     },
     desktop: { executable: values.blockbench, mcpUrl: values["blockbench-mcp-url"] ?? DEFAULT_DESKTOP_MCP_URL },
+    shareUrl: DEFAULT_SHARE_URL,
   }));
   await server.connect(new StdioServerTransport());
   process.stderr.write(`${HEADLESS_SERVER_NAME} ${VERSION} ready. Roots: ${roots.join(", ")}. Renderer: ${cli ?? "built-in engine (installs its packages on first render)"}\n`);

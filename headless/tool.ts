@@ -33,6 +33,8 @@ export interface IHeadlessContext {
   webApp: IWebAppOptions;
   /** How to start the Blockbench desktop app. */
   desktop: IDesktopOptions;
+  /** Root of Blockbench's model sharing service (blckbn.ch). */
+  shareUrl: string;
 }
 
 /** A tool ready to register on any server. */

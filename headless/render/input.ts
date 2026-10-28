@@ -62,13 +62,13 @@ async function textureImage(store: ModelStore, modelDir: string, texture: JsonRe
 }
 
 /**
- * Writes the copy of a model that a render reads.
+ * Reads a model with its textures reduced to image data: the embedded data URL,
+ * or the workspace PNG a texture links to, inlined. Local paths are dropped.
  *
  * @param modelPath - Model path already resolved inside the workspace.
- * @param dir - Folder for the copy (the scratch folder).
  * @throws Error when the model is not a JSON object.
  */
-export async function writeRenderInput(store: ModelStore, modelPath: string, dir: string): Promise<IRenderInput> {
+export async function readWithInlinedTextures(store: ModelStore, modelPath: string): Promise<{ doc: JsonRecord; warnings: string[] }> {
   const doc: unknown = JSON.parse(await Bun.file(modelPath).text());
   if (!isRecord(doc)) throw new Error(`${modelPath} does not hold a JSON object.`);
   const entries: unknown[] = Array.isArray(doc.textures) ? doc.textures : [];
@@ -82,10 +82,21 @@ export async function writeRenderInput(store: ModelStore, modelPath: string, dir
       return image.problems.length > 0 ? { texture: rest, warning: `Texture "${name}" renders without its image: ${image.problems.join(" ")}` } : { texture: rest };
     }),
   );
+  const copy = Array.isArray(doc.textures) ? { ...doc, textures: prepared.map((entry) => entry.texture) } : doc;
+  return { doc: copy, warnings: prepared.flatMap((entry) => (entry.warning === undefined ? [] : [entry.warning])) };
+}
+
+/**
+ * Writes the copy of a model that a render reads.
+ *
+ * @param modelPath - Model path already resolved inside the workspace.
+ * @param dir - Folder for the copy (the scratch folder).
+ * @throws Error when the model is not a JSON object.
+ */
+export async function writeRenderInput(store: ModelStore, modelPath: string, dir: string): Promise<IRenderInput> {
+  const { doc, warnings } = await readWithInlinedTextures(store, modelPath);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   const path = join(dir, `${basename(modelPath, ".bbmodel")}-render-${crypto.randomUUID().slice(0, 8)}.bbmodel`);
-  const copy = Array.isArray(doc.textures) ? { ...doc, textures: prepared.map((entry) => entry.texture) } : doc;
-  await writeFile(path, JSON.stringify(copy), { flag: "wx", mode: 0o600 });
-  const warnings = prepared.flatMap((entry) => (entry.warning === undefined ? [] : [entry.warning]));
+  await writeFile(path, JSON.stringify(doc), { flag: "wx", mode: 0o600 });
   return { path, warnings, dispose: () => unlink(path).catch(() => undefined) };
 }

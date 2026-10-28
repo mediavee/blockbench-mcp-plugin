@@ -5,6 +5,8 @@
  * Layout (units): a 8×6×12 body standing on four 2×6×2 legs, a head at the front
  * (-Z), all legs directly under the body. Leg groups pivot at the hip.
  *
+ * Also a local stand-in for Blockbench's sharing service.
+ *
  * @module
  */
 
@@ -52,4 +54,25 @@ export function creatureModel(withWalk = false): IBBModel {
     ...walkOps,
   ]);
   return applyOperations(emptyModel("free", "creature", false, { width: 64, height: 64 }), operations).doc;
+}
+
+/** A local stand-in for blckbn.ch. */
+export interface IShareStub {
+  url: string;
+  requests: { method: string; path: string; contentType: string | null; body: Record<string, unknown> }[];
+  stop(): void;
+}
+
+/** Local stand-in for blckbn.ch that records each request and answers with `reply`. */
+export function shareStub(reply: () => Response = () => Response.json({ id: "ABoX92", text: "Model uploaded successfully" })): IShareStub {
+  const requests: IShareStub["requests"] = [];
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(request) {
+      requests.push({ method: request.method, path: new URL(request.url).pathname, contentType: request.headers.get("content-type"), body: (await request.json()) as Record<string, unknown> });
+      return reply();
+    },
+  });
+  return { url: `http://127.0.0.1:${server.port}/`, requests, stop: () => server.stop(true) };
 }

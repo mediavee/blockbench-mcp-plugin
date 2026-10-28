@@ -1,15 +1,20 @@
 /**
  * Tools that hand a model to a Blockbench app: a Blockbench web app link that
- * carries the file in its URL, and a launcher for the desktop app.
+ * carries the file in its URL, a public link from Blockbench's sharing
+ * service, and a launcher for the desktop app.
  *
  * @module
  */
 
-import { basename } from "node:path";
+import { mkdir, unlink } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { z } from "zod";
 import { launchBlockbench, locateBlockbench, waitForEndpoint } from "../app/desktop";
-import { buildWebAppFileLinks, buildWebAppLinks } from "../app/web-link";
-import { defineTool, type IRegistrableTool } from "../tool";
+import { DEFAULT_SHARE_EXPIRY, SHARE_EXPIRIES, shareModel } from "../app/share";
+import { buildWebAppFileLinks, buildWebAppLinks, prepareModelForWeb } from "../app/web-link";
+import { pngDataUrl } from "../document/png";
+import { readWithInlinedTextures, writeRenderInput } from "../render/input";
+import { defineTool, fileParam, type IHeadlessContext, type IRegistrableTool } from "../tool";
 
 /** Files the desktop app opens from its command line. */
 const OPENABLE = [".bbmodel", ".json", ".obj", ".gltf", ".glb", ".png"];
@@ -40,6 +45,44 @@ const webUrlTool = defineTool({
     }
     const content = await Bun.file(path).text();
     return { path, web_app: await buildWebAppFileLinks(content, basename(path), options, path) };
+  },
+});
+
+/** Renders the 640×480 three-quarter thumbnail Blockbench's share dialog takes from its viewport. */
+async function shareThumbnail(path: string, context: IHeadlessContext): Promise<string> {
+  const input = await writeRenderInput(context.store, path, context.scratchDir);
+  await mkdir(context.scratchDir, { recursive: true, mode: 0o700 });
+  const output = join(context.scratchDir, `${basename(path, ".bbmodel")}-share-${crypto.randomUUID().slice(0, 8)}.png`);
+  try {
+    await context.renderer.render({ input: input.path, output, view: "three-quarter", width: 640, height: 480 });
+    return pngDataUrl(new Uint8Array(await Bun.file(output).arrayBuffer()));
+  } finally {
+    await Promise.all([input.dispose(), unlink(output).catch(() => undefined)]);
+  }
+}
+
+const shareUrlTool = defineTool({
+  name: "bbmodel_share_url",
+  title: "Share Model Link (public)",
+  description: "Publishes a .bbmodel to Blockbench's public model sharing service (blckbn.ch, the same service as Blockbench's File > Share) and returns a short link (url) that opens it in Blockbench. The link is PUBLIC: anyone who has it can open and download the model, its textures included, until it expires (expires). Use it when the user asks for a Blockbench link to send or share; bbmodel_web_url makes a link that uploads nothing. Textures are sent as the images embedded in the model or the workspace PNGs they link to; local file paths are left out. thumbnail: true renders a preview image first, with the render engine (see bbmodel_render).",
+  parameters: {
+    file: fileParam,
+    name: z.string().min(1).optional().describe("Name shown on the shared page; defaults to the file name without its extension."),
+    expire: z.enum(SHARE_EXPIRIES).default(DEFAULT_SHARE_EXPIRY).describe("How long the service keeps the model: 10m, 1h, 1d, 2d, 1w or 2w."),
+    thumbnail: z.boolean().default(false).describe("Render a 640×480 preview image and upload it with the model."),
+  },
+  // Publishes to a third-party service: never auto-approved as read-only.
+  readOnly: false,
+  openWorld: true,
+  async execute({ file, name, expire, thumbnail }, context) {
+    const { path } = await context.store.read(file);
+    const { doc, warnings } = await readWithInlinedTextures(context.store, path);
+    const preview = thumbnail ? await shareThumbnail(path, context) : undefined;
+    const shared = await shareModel(
+      { name: name ?? basename(path, ".bbmodel"), expire, model: JSON.stringify(prepareModelForWeb(doc, false)), thumbnail: preview },
+      context.shareUrl,
+    );
+    return { ...shared, ...(warnings.length > 0 ? { warnings } : {}) };
   },
 });
 
@@ -91,4 +134,4 @@ const launchTool = defineTool({
 });
 
 /** App hand-off tools. */
-export const appTools: readonly IRegistrableTool[] = [webUrlTool, launchTool];
+export const appTools: readonly IRegistrableTool[] = [webUrlTool, shareUrlTool, launchTool];

@@ -80,6 +80,7 @@ bun run headless/call.ts --root ./models bbmodel_edit @ops.json
 | `bbmodel_export_modded_entity` | Java entity model class from Blockbench's Modded Entity templates (Forge 1.7–1.17+, Fabric Yarn) |
 | `bbmodel_render`, `bbmodel_contact_sheet` | Render one view, or several views at once, to PNG |
 | `bbmodel_web_url` | Link that opens a model in the Blockbench web app with the file inside the URL |
+| `bbmodel_share_url` | Public short link (`https://blckbn.ch/<id>`) from Blockbench's model sharing service, as File > Share makes |
 | `blockbench_launch` | Start the Blockbench desktop app, optionally opening a file, and wait for its MCP plugin if asked |
 
 ## Behavior
@@ -96,6 +97,8 @@ bun run headless/call.ts --root ./models bbmodel_edit @ops.json
 - Past that limit, `note` points to `blockbench_launch` instead.
 
 Pass `--no-web-links` to leave these out of write results, or `--web-app-url` to use another copy of the web app.
+
+**Sharing a public link.** `bbmodel_share_url` uploads the model to Blockbench's sharing service, the same request Blockbench's File > Share dialog sends (`js/io/share.ts`), and returns `url`, `id` and `expires`. Anyone with the link can open and download the model until it expires. `expire` takes the dialog's choices (`10m`, `1h`, `1d`, `2d`, `1w`, `2w`; default `2d`). Textures go up as the images embedded in the model or the workspace PNGs they link to; local paths are left out. `thumbnail: true` renders a 640×480 preview first, with the render engine. The service refuses models over its size limit with HTTP 413, which the tool reports as an error; no link is returned for a failed upload.
 
 **Launching the desktop app.** `blockbench_launch` starts Blockbench with a workspace file as its last argument; if Blockbench is already running, the file opens as a new tab. The app is found from `--blockbench <path>`, then `BLOCKBENCH_PATH`, then `blockbench` on `PATH`, then the standard install folders. With `wait_for_mcp_ms`, the tool waits until the desktop plugin's MCP server answers (`--blockbench-mcp-url`), so an agent can go on to drive the app through the plugin.
 
