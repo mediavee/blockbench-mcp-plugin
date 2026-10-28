@@ -9,9 +9,8 @@
  * because Node refuses to strip types from files under `node_modules` (where `npx` unpacks this
  * package).
  *
- * The install runs `npm install`, which resolves the manifest's version ranges. Once a
- * `package-lock.json` is committed beside the manifest, it is copied too and installed with
- * `npm ci`, which pins every package; none is committed yet, so nothing is pinned.
+ * The install runs `npm ci` against the `package-lock.json` committed beside the manifest, so every
+ * package, Dawn's native build included, is the version that was tested.
  *
  * Layout of the cache folder (`home`):
  * - `package.json`, `package-lock.json`, `node_modules/`: the installed dependencies
