@@ -54,7 +54,7 @@ const renderTool = defineTool({
     height: z.number().int().min(64).max(4096).default(768),
     transparent: z.boolean().default(false),
     orthographic: z.boolean().default(false),
-    lighting: z.enum(["studio", "outdoor", "flat"]).optional(),
+    lighting: z.enum(["studio", "outdoor", "flat", "game"]).optional().describe("game: the texture's own colours under Minecraft's per-face shade."),
     output: z.string().optional().describe("PNG path inside the workspace; defaults to a scratch file outside it."),
     overwrite: z.boolean().default(false).describe("Allow output to replace an existing PNG."),
     ...clipParams,
@@ -96,13 +96,13 @@ const DEFAULT_SHEET_VIEWS: RenderView[] = ["front", "right", "back", "left", "th
 const contactSheetTool = defineTool({
   name: "bbmodel_contact_sheet",
   title: "Render Contact Sheet",
-  description: `Renders several named views of a .bbmodel (front, right, back, left, three-quarter, top by default) with identical settings and returns every image, labeled. Use it to review a model from all sides in one call, for example after bbmodel_validate. Flat lighting and an orthographic camera make faces easy to compare. ${FIRST_RENDER_NOTE}`,
+  description: `Renders several named views of a .bbmodel (front, right, back, left, three-quarter, top by default) with identical settings and returns every image, labeled. Use it to review a model from all sides in one call, for example after bbmodel_validate. The default game lighting (Minecraft's per-face shade, true texture colours) and an orthographic camera make faces easy to compare. ${FIRST_RENDER_NOTE}`,
   parameters: {
     file: fileParam,
     views: z.array(z.enum(RENDER_VIEWS)).min(1).max(7).default(DEFAULT_SHEET_VIEWS),
     size: z.number().int().min(64).max(2048).default(384).describe("Width and height of each view."),
     orthographic: z.boolean().default(true),
-    lighting: z.enum(["studio", "outdoor", "flat"]).default("flat"),
+    lighting: z.enum(["studio", "outdoor", "flat", "game"]).default("game"),
     ...clipParams,
   },
   // Not read-only: images are written to the scratch folder, and the first render installs packages from the npm registry.

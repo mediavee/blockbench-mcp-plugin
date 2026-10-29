@@ -133,6 +133,8 @@ async function main(): Promise<void> {
     shareUrl: DEFAULT_SHARE_URL,
   }));
   await server.connect(new StdioServerTransport());
+  // Render workers are child processes that would keep the server alive after its client leaves.
+  process.stdin.once("end", () => renderer.close());
   process.stderr.write(`${HEADLESS_SERVER_NAME} ${VERSION} ready. Roots: ${roots.join(", ")}. Renderer: ${cli ?? "built-in engine (installs its packages on first render)"}\n`);
 }
 

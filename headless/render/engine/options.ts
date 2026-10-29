@@ -48,7 +48,7 @@ export interface IRenderSettings {
     fit: "auto" | "sphere" | "box";
   };
   lighting: {
-    preset: "studio" | "outdoor" | "flat";
+    preset: "studio" | "outdoor" | "flat" | "game";
     shadows: boolean;
     ground: "shadow" | "solid" | "none";
     groundColor: string;
@@ -196,7 +196,7 @@ export function resolveOptions(raw: RenderOptionsInput & { input?: string; outpu
       fit: problems.choice("camera.fit", camera.fit, ["auto", "sphere", "box"], DEFAULTS.camera.fit),
     },
     lighting: {
-      preset: problems.choice("lighting.preset", lighting.preset, ["studio", "outdoor", "flat"], DEFAULTS.lighting.preset),
+      preset: problems.choice("lighting.preset", lighting.preset, ["studio", "outdoor", "flat", "game"], DEFAULTS.lighting.preset),
       shadows: lighting.shadows ?? DEFAULTS.lighting.shadows,
       ground: problems.choice("lighting.ground", lighting.ground, ["shadow", "solid", "none"], DEFAULTS.lighting.ground),
       groundColor: lighting.groundColor ?? DEFAULTS.lighting.groundColor,
